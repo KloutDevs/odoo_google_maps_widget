@@ -3,7 +3,7 @@
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { CharField } from "@web/views/fields/char/char_field";
-import { useRef, useState, onMounted } from "@odoo/owl";
+import { useRef, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 
 export class GoogleMapsWidget extends CharField {
@@ -11,6 +11,7 @@ export class GoogleMapsWidget extends CharField {
         super.setup();
         this.orm = useService('orm');
         this.mapContainerRef = useRef('mapContainer');
+        this.inputRef = useRef('addressInput');
         this.state = useState({
             latitude: -27.3963033,
             longitude: -55.9657155,
@@ -18,27 +19,27 @@ export class GoogleMapsWidget extends CharField {
             currentMarker: null,
         });
         this.map = null;
-        onMounted(() => this._initializeMap());
+        this.autocomplete = null;
+        onMounted(() => {
+            this._initializeMap();
+            this._initializeAutocomplete();
+        });
+        onWillUnmount(() => {
+            if (this.autocomplete) {
+                google.maps.event.clearInstanceListeners(this.autocomplete);
+            }
+        });
     }
 
     async _initializeMap() {
         const mapContainer = this.mapContainerRef.el;
-
-        console.log("Map Container")
-        console.log(mapContainer)
-        console.log(`PROPS`)
-        console.log(this.props)
-        
-        
         if (!mapContainer) {
             console.error('Map container not found.');
             return;
         }
-        
+
         const value = this.props.record.data[this.props.name] || '';
-        console.log(`VALUE ${value}`)
         if (value) {
-            this.state.address = value;
             await this.getLatLngFromAddress(value);
         }
 
@@ -54,40 +55,72 @@ export class GoogleMapsWidget extends CharField {
         });
 
         this.map.addListener('click', async (event) => {
-
-            console.log("GOOGLE MAP CLICK EVENT")
-            console.log(event)
             const lat = event.latLng.lat();
             const lng = event.latLng.lng();
-            this.state.latitude = lat;
-            this.state.longitude = lng;
-            console.log(`Latitud Sin Establecer: ${lat}`)
-            console.log(`Longitud Sin Establecer: ${lng}`)
-            console.log(`Latitud Establecida: ${this.state.latitude}`)
-            console.log(`Longitud Establecida: ${this.state.longitude}`)
+            await this._updateLocation(lat, lng);
+        });
+    }
 
+    _initializeAutocomplete() {
+        const input = this.inputRef.el;
+        console.log(input);
+        if (!input) {
+            console.error('Address input not found.');
+            return;
+        }
+
+        this.autocomplete = new google.maps.places.Autocomplete(input, {
+            types: ['geocode'],
+            fields: ['address_components', 'geometry', 'name'],
+            componentRestrictions: { country: 'ar' }, // Restrict to Argentina
+        });
+
+        this.autocomplete.addListener('place_changed', () => {
+            const place = this.autocomplete.getPlace();
+            console.log('Selected place:', place);
+            if (!place.geometry || !place.geometry.location) {
+                console.error("No details available for input: '" + place.name + "'");
+                return;
+            }
+
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            this._updateLocation(lat, lng, place.name);
+        });
+
+        // Add event listener for input changes
+        input.addEventListener('input', () => {
+            console.log('Input changed:', input.value);
+        });
+    }
+
+    async _updateLocation(lat, lng, address = null) {
+        console.log(`Updating location: ${lat}, ${lng}, ${address}`);
+        this.state.latitude = lat;
+        this.state.longitude = lng;
+
+        if (!address) {
             try {
-                const address = await this.getAddressFromLatLng(lat, lng);
-                console.log("DIRECCIÓN MAPA: "+address);
-                await this.updateFieldValue(address);
+                address = await this.getAddressFromLatLng(lat, lng);
             } catch (error) {
                 console.error('Error fetching address:', error);
+                return;
             }
+        }
 
-            if (this.state.currentMarker) {
-                console.log(`BEFORE STATE OF CURRENTMARKER DEFINE`)
-                console.log(this.state)
-                this.state.currentMarker.setMap(null);
-                console.log(`AFTER STATE OF CURRENTMARKER DEFINE`)
-                console.log(this.state)
-            }
+        await this.updateFieldValue(address);
 
-            this.state.currentMarker = new google.maps.Marker({
-                position: { lat, lng },
-                map: this.map,
-                title: 'Ubicación Seleccionada'
-            });
+        if (this.state.currentMarker) {
+            this.state.currentMarker.setMap(null);
+        }
+
+        this.state.currentMarker = new google.maps.Marker({
+            position: { lat, lng },
+            map: this.map,
+            title: 'Ubicación Seleccionada'
         });
+
+        this.map.setCenter({ lat, lng });
     }
 
     async getAddressFromLatLng(latitude, longitude) {
@@ -96,6 +129,7 @@ export class GoogleMapsWidget extends CharField {
             const latlng = { lat: latitude, lng: longitude };
 
             geocoder.geocode({ location: latlng }, (results, status) => {
+                console.log('Geocode results:', results);
                 if (status === "OK" && results[0]) {
                     resolve(results[0].formatted_address);
                 } else {
@@ -109,6 +143,7 @@ export class GoogleMapsWidget extends CharField {
         return new Promise((resolve, reject) => {
             const geocoder = new google.maps.Geocoder();
             geocoder.geocode({ address: address }, (results, status) => {
+                console.log('Geocode results:', results);
                 if (status === "OK" && results[0]) {
                     const { lat, lng } = results[0].geometry.location;
                     this.state.latitude = lat();
@@ -122,6 +157,7 @@ export class GoogleMapsWidget extends CharField {
     }
 
     async updateFieldValue(value) {
+        console.log('Updating field value:', value);
         await this.props.record.update({ [this.props.name]: value });
     }
 

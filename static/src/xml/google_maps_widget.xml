@@ -2,8 +2,8 @@
 <templates xml:space="preserve">
     <t t-name="GoogleMapsWidget" owl="1">
         <div class="o_field_google_maps_widget">
-            <input type="text" t-att-value="props.record.data[props.name]" class="o_input" t-on-input="(ev) => this.updateFieldValue(ev.target.value)" t-att-placeholder="props.placeholder"/>
-            <div t-ref="mapContainer" class="google_maps_container" style="height: 300px; width: 100%;"/>
+            <input t-ref="addressInput" type="text" t-att-value="props.record.data[props.name]" class="o_input" t-on-input="(ev) => this.updateFieldValue(ev.target.value)" t-att-placeholder="props.placeholder"/>
+            <div t-ref="mapContainer" class="google_maps_container" style="height: 300px; width: 100%; margin-top: 10px;"/>
             <button class="btn btn-secondary mt-2" t-on-click="_OpenMapview">Open in Google Maps</button>
         </div>
     </t>

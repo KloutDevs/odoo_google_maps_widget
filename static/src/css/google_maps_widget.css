@@ -1,0 +1,11 @@
+.pac-container {
+  z-index: 1200 !important;
+}
+
+.modal {
+  z-index: 1050 !important;
+}
+
+.modal-backdrop {
+  z-index: 1040 !important;
+}
