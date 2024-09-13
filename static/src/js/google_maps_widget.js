@@ -5,25 +5,31 @@ import { useService } from "@web/core/utils/hooks";
 import { CharField } from "@web/views/fields/char/char_field";
 import { useRef, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { registry } from "@web/core/registry";
+import { MapLoader } from "./google_maps_loader";
 
 export class GoogleMapsWidget extends CharField {
     setup() {
         super.setup();
         this.orm = useService('orm');
+        this.rpc = useService('rpc');
         this.mapContainerRef = useRef('mapContainer');
         this.inputRef = useRef('addressInput');
+
         this.state = useState({
-            latitude: -27.3963033,
-            longitude: -55.9657155,
+            latitude: null,
+            longitude: null,
             address: '',
             currentMarker: null,
         });
+
         this.map = null;
         this.autocomplete = null;
-        onMounted(() => {
-            this._initializeMap();
-            this._initializeAutocomplete();
+
+        onMounted(async () => {
+            await this.loadConfigParameters();
+            await this.initializeGoogleMaps();
         });
+        
         onWillUnmount(() => {
             if (this.autocomplete) {
                 google.maps.event.clearInstanceListeners(this.autocomplete);
@@ -31,10 +37,47 @@ export class GoogleMapsWidget extends CharField {
         });
     }
 
+    async loadConfigParameters() {
+        const [defaultLatitude, defaultLongitude, defaultCountry] = await Promise.all([
+            this.rpc('/web/dataset/call_kw/ir.config_parameter/get_param', {
+                model: 'ir.config_parameter',
+                method: 'get_param',
+                args: ['google_map_widget.default_latitude'],
+                kwargs: {},
+            }),
+            this.rpc('/web/dataset/call_kw/ir.config_parameter/get_param', {
+                model: 'ir.config_parameter',
+                method: 'get_param',
+                args: ['google_map_widget.default_longitude'],
+                kwargs: {},
+            }),
+            this.rpc('/web/dataset/call_kw/ir.config_parameter/get_param', {
+                model: 'ir.config_parameter',
+                method: 'get_param',
+                args: ['google_map_widget.default_country'],
+                kwargs: {},
+            }),
+        ]);
+
+        this.state.latitude = parseFloat(defaultLatitude) || -27.3963033;
+        this.state.longitude = parseFloat(defaultLongitude) || -55.9657155;
+        this.defaultCountry = defaultCountry || 'ar';
+    }
+
+    async initializeGoogleMaps() {
+        try {
+            await MapLoader.load(this.rpc);
+            await this._initializeMap();
+            this._initializeAutocomplete();
+        } catch(e) {
+            console.error("Error initializing google maps api:", e);
+        }
+    }
+
     async _initializeMap() {
         const mapContainer = this.mapContainerRef.el;
         if (!mapContainer) {
-            console.error('Map container not found.');
+            console.error(_t('Map container not found.'));
             return;
         }
 
@@ -42,17 +85,12 @@ export class GoogleMapsWidget extends CharField {
         if (value) {
             await this.getLatLngFromAddress(value);
         }
-
         this.map = new google.maps.Map(mapContainer, {
             center: { lat: this.state.latitude, lng: this.state.longitude },
             zoom: 13
         });
 
-        this.state.currentMarker = new google.maps.Marker({
-            position: { lat: this.state.latitude, lng: this.state.longitude },
-            map: this.map,
-            title: 'Selected Location'
-        });
+        this.updateMarker(this.state.latitude, this.state.longitude);
 
         this.map.addListener('click', async (event) => {
             const lat = event.latLng.lat();
@@ -63,23 +101,21 @@ export class GoogleMapsWidget extends CharField {
 
     _initializeAutocomplete() {
         const input = this.inputRef.el;
-        console.log(input);
         if (!input) {
-            console.error('Address input not found.');
+            console.error(_t('Address input not found.'));
             return;
         }
 
         this.autocomplete = new google.maps.places.Autocomplete(input, {
             types: ['geocode'],
             fields: ['address_components', 'geometry', 'name'],
-            componentRestrictions: { country: 'ar' }, // Restrict to Argentina
+            componentRestrictions: { country: this.defaultCountry },
         });
 
         this.autocomplete.addListener('place_changed', () => {
             const place = this.autocomplete.getPlace();
-            console.log('Selected place:', place);
             if (!place.geometry || !place.geometry.location) {
-                console.error("No details available for input: '" + place.name + "'");
+                console.error(_t("No details available efor input: %s", place.name));
                 return;
             }
 
@@ -88,14 +124,10 @@ export class GoogleMapsWidget extends CharField {
             this._updateLocation(lat, lng, place.name);
         });
 
-        // Add event listener for input changes
-        input.addEventListener('input', () => {
-            console.log('Input changed:', input.value);
-        });
     }
 
     async _updateLocation(lat, lng, address = null) {
-        console.log(`Updating location: ${lat}, ${lng}, ${address}`);
+        console.log(_t('Updating location: %s - %s - %s', lat, lng, address));
         this.state.latitude = lat;
         this.state.longitude = lng;
 
@@ -103,13 +135,26 @@ export class GoogleMapsWidget extends CharField {
             try {
                 address = await this.getAddressFromLatLng(lat, lng);
             } catch (error) {
-                console.error('Error fetching address:', error);
+                console.error(_t('Error fetching address: %s', error));
                 return;
             }
         }
 
         await this.updateFieldValue(address);
 
+        if (this.props.latitudeField) {
+            await this.props.record.update({ [this.props.latitudeField]: lat });
+        }
+        if (this.props.longitudeField) {
+            await this.props.record.update({ [this.props.longitudeField]: lng });
+        }
+
+        this.updateMarker(lat, lng);
+
+        this.map.setCenter({ lat, lng });
+    }
+
+    updateMarker(lat, lng) {
         if (this.state.currentMarker) {
             this.state.currentMarker.setMap(null);
         }
@@ -117,10 +162,8 @@ export class GoogleMapsWidget extends CharField {
         this.state.currentMarker = new google.maps.Marker({
             position: { lat, lng },
             map: this.map,
-            title: 'Ubicación Seleccionada'
+            title: _t('Selected Location')
         });
-
-        this.map.setCenter({ lat, lng });
     }
 
     async getAddressFromLatLng(latitude, longitude) {
@@ -157,14 +200,13 @@ export class GoogleMapsWidget extends CharField {
     }
 
     async updateFieldValue(value) {
-        console.log('Updating field value:', value);
         await this.props.record.update({ [this.props.name]: value });
     }
 
     async _OpenMapview() {
         const { longitude, latitude } = this.state;
         if (latitude && longitude) {
-            window.open(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`, '_blank');
+            window.open(_t('https://www.google.com/maps/search/?api=1&query=%s,%s_blank', latitude, longitude ));
         }
     }
 }
@@ -178,6 +220,8 @@ export const googleMapsWidget = {
     extractProps: ({ attrs, options }) => ({
         isPassword: attrs.password === "true",
         placeholder: attrs.placeholder,
+        latitudeField: attrs.latitude,
+        longitudeField: attrs.longitude,
     }),
 };
 
