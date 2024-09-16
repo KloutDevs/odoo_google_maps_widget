@@ -43,7 +43,7 @@
     'data': [
         'views/res_config_settings_views.xml',
     ],
-    'images': [],
+    'images': ['static/description/thumbnail.png'],
     'license': 'AGPL-3',
     'installable': True,
     'auto_install': False,
