@@ -29,6 +29,8 @@
     'author': 'Nahuel Schmidt.',
     'maintainer': 'Nahuel Schmidt.',
     'website': 'https://github.com/KloutDevs',
+    'price': 4.99,
+    'currency': 'USD',
     'depends': ['base'],
     'assets': {
         'web.assets_backend': [
